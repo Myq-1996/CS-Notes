@@ -40,7 +40,13 @@
 
 - ArrayList：基于动态数组实现，支持随机访问。
 
-- Vector：和 ArrayList 类似，但它是线程安全的。
+- 
+
+
+
+
+
+or：和 ArrayList 类似，但它是线程安全的。
 
 - LinkedList：基于双向链表实现，只能顺序访问，但是可以快速地在链表中间插入和删除元素。不仅如此，LinkedList 还可以用作栈、队列和双向队列。
 
@@ -187,160 +193,41 @@ public E remove(int index) {
 }
 ```
 
-#### 4. 序列化
-
-ArrayList 基于数组实现，并且具有动态扩容特性，因此保存元素的数组不一定都会被使用，那么就没必要全部进行序列化。
-
-保存元素的数组 elementData 使用 transient 修饰，该关键字声明数组默认不会被序列化。
-
-```java
-transient Object[] elementData; // non-private to simplify nested class access
-```
-
-ArrayList 实现了 writeObject() 和 readObject() 来控制只序列化数组中有元素填充那部分内容。
-
-```java
-private void readObject(java.io.ObjectInputStream s)
-    throws java.io.IOException, ClassNotFoundException {
-    elementData = EMPTY_ELEMENTDATA;
-
-    // Read in size, and any hidden stuff
-    s.defaultReadObject();
-
-    // Read in capacity
-    s.readInt(); // ignored
-
-    if (size > 0) {
-        // be like clone(), allocate array based upon size not capacity
-        ensureCapacityInternal(size);
-
-        Object[] a = elementData;
-        // Read in all elements in the proper order.
-        for (int i=0; i<size; i++) {
-            a[i] = s.readObject();
-        }
-    }
-}
-```
-
-```java
-private void writeObject(java.io.ObjectOutputStream s)
-    throws java.io.IOException{
-    // Write out element count, and any hidden stuff
-    int expectedModCount = modCount;
-    s.defaultWriteObject();
-
-    // Write out size as capacity for behavioural compatibility with clone()
-    s.writeInt(size);
-
-    // Write out all elements in the proper order.
-    for (int i=0; i<size; i++) {
-        s.writeObject(elementData[i]);
-    }
-
-    if (modCount != expectedModCount) {
-        throw new ConcurrentModificationException();
-    }
-}
-```
-
-序列化时需要使用 ObjectOutputStream 的 writeObject() 将对象转换为字节流并输出。而 writeObject() 方法在传入的对象存在 writeObject() 的时候会去反射调用该对象的 writeObject() 来实现序列化。反序列化使用的是 ObjectInputStream 的 readObject() 方法，原理类似。
-
-```java
-ArrayList list = new ArrayList();
-ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(file));
-oos.writeObject(list);
-```
-
-#### 5. Fail-Fast
+#### 4. Fail-Fast
 
 modCount 用来记录 ArrayList 结构发生变化的次数。结构发生变化是指添加或者删除至少一个元素的所有操作，或者是调整内部数组的大小，仅仅只是设置元素的值不算结构发生变化。
 
 在进行序列化或者迭代等操作时，需要比较操作前后 modCount 是否改变，如果改变了需要抛出 ConcurrentModificationException。代码参考上节序列化中的 writeObject() 方法。
 
+### 5. 与Vector的比较
 
-### Vector
-
-#### 1. 同步
-
-它的实现与 ArrayList 类似，但是使用了 synchronized 进行同步。
-
-```java
-public synchronized boolean add(E e) {
-    modCount++;
-    ensureCapacityHelper(elementCount + 1);
-    elementData[elementCount++] = e;
-    return true;
-}
-
-public synchronized E get(int index) {
-    if (index >= elementCount)
-        throw new ArrayIndexOutOfBoundsException(index);
-
-    return elementData(index);
-}
-```
-
-#### 2. 扩容
-
-Vector 的构造函数可以传入 capacityIncrement 参数，它的作用是在扩容时使容量 capacity 增长 capacityIncrement。如果这个参数的值小于等于 0，扩容时每次都令 capacity 为原来的两倍。
-
-```java
-public Vector(int initialCapacity, int capacityIncrement) {
-    super();
-    if (initialCapacity < 0)
-        throw new IllegalArgumentException("Illegal Capacity: "+
-                                           initialCapacity);
-    this.elementData = new Object[initialCapacity];
-    this.capacityIncrement = capacityIncrement;
-}
-```
-
-```java
-private void grow(int minCapacity) {
-    // overflow-conscious code
-    int oldCapacity = elementData.length;
-    int newCapacity = oldCapacity + ((capacityIncrement > 0) ?
-                                     capacityIncrement : oldCapacity);
-    if (newCapacity - minCapacity < 0)
-        newCapacity = minCapacity;
-    if (newCapacity - MAX_ARRAY_SIZE > 0)
-        newCapacity = hugeCapacity(minCapacity);
-    elementData = Arrays.copyOf(elementData, newCapacity);
-}
-```
-
-调用没有 capacityIncrement 的构造函数时，capacityIncrement 值被设置为 0，也就是说默认情况下 Vector 每次扩容时容量都会翻倍。
-
-```java
-public Vector(int initialCapacity) {
-    this(initialCapacity, 0);
-}
-
-public Vector() {
-    this(10);
-}
-```
-
-#### 3. 与 ArrayList 的比较
-
+- Vector 的实现与 ArrayList 类似，但是使用了 synchronized 进行同步。
 - Vector 是同步的，因此开销就比 ArrayList 要大，访问速度更慢。最好使用 ArrayList 而不是 Vector，因为同步操作完全可以由程序员自己来控制；
 - Vector 每次扩容请求其大小的 2 倍（也可以通过构造函数设置增长的容量），而 ArrayList 是 1.5 倍。
+- 可以使用 `List<String> synList = Collections.synchronizedList(list);` 得到一个线程安全的 ArrayList。
+- 也可以使用 concurrent 并发包下的 CopyOnWriteArrayList 类。
 
-#### 4. 替代方案
 
-可以使用 `Collections.synchronizedList();` 得到一个线程安全的 ArrayList。
+### TreeMap
 
-```java
-List<String> list = new ArrayList<>();
-List<String> synList = Collections.synchronizedList(list);
-```
+#### 1. 结构
 
-也可以使用 concurrent 并发包下的 CopyOnWriteArrayList 类。
+TreeMap 基于红黑树实现，增删改查的平均和最差时间复杂度均为 O(logn) ，最大特点是 Key 有序。
+Key 必须实现 Comparable 接口或提供的 Comparator 比较器，所以 Key 不允许为 null。
 
-```java
-List<String> list = new CopyOnWriteArrayList<>();
-```
+#### 2. 去重
+
+HashMap 依靠 hashCode 和 equals 去重，而 TreeMap 依靠 Comparable 或 Comparator。
+TreeMap 排序时，如果比较器不为空就会优先使用比较器的 compare 方法，否则使用 Key 实现的
+Comparable 的 compareTo 方法，两者都不满足会抛出异常。
+
+#### 3. 排序
+
+TreeMap 通过 put 和 deleteEntry 实现增加和删除树节点。插入新节点的规则有三个：① 需要调整
+的新节点总是红色的。② 如果插入新节点的父节点是黑色的，不需要调整。③ 如果插入新节点的父节
+点是红色的，由于红黑树不能出现相邻红色，进入循环判断，通过重新着色或左右旋转来调整。
+TreeMap 的插入操作就是按照 Key 的对比往下遍历，大于节点值向右查找，小于向左查找，先按照二
+叉查找树的特性操作，后续会重新着色和旋转，保持红黑树的特性。
 
 ### CopyOnWriteArrayList
 
@@ -429,13 +316,17 @@ ArrayList 基于动态数组实现，LinkedList 基于双向链表实现。Array
 
 JDK8 之前底层实现是数组 + 链表，JDK8 改为数组 + 链表/红黑树，节点类型从Entry 变更为 Node。主
 要成员变量包括存储数据的 table 数组、元素数量 size、加载因子 loadFactor。
+
 table 数组记录 HashMap 的数据，每个下标对应一条链表，所有哈希冲突的数据都会被存放到同一条
 链表，Node/Entry 节点包含四个成员变量：key、value、next 指针和 hash 值。
+
 HashMap 中数据以键值对的形式存在，键对应的 hash 值用来计算数组下标，如果两个元素 key 的
 hash 值一样，就会发生哈希冲突，被放到同一个链表上，为使查询效率尽可能高，键的 hash 值要尽可
 能分散。
+
 HashMap 默认初始化容量为 16，扩容容量必须是 2 的幂次方、最大容量为 1<< 30 、默认加载因子为
-0.75。
+0.75。这是因为在&运算比%取模更快的情况下，(n - 1) & hash，当n为2次幂时，会满足一个公式：(n - 1) & hash = hash % n
+
 
 <div align="center"> <img src="https://cs-notes-1256109796.cos.ap-guangzhou.myqcloud.com/image-20191208234948205.png"/> </div><br>
 
@@ -595,11 +486,12 @@ public final int hashCode() {
 
 **4.3 为什么length一定是2的幂次方**
 
-
 ```
-到这里，我们提了一个关键的问题： HashMap 的容量为什么建议是 2的幂次方？正好可以和上面的话题接上。楼主就是这么设计的。
+到这里，我们提了一个关键的问题： HashMap 的容量为什么建议是 2的幂次方？
 
 为什么要 2 的幂次方呢？
+
+这是因为在&运算比%取模更快的情况下，(n - 1) & hash，当n为2次幂时，会满足一个公式：(n - 1) & hash = hash % n。而且能够让散列均匀。
 
 我们说，hash 算法的目的是为了让hash值均匀的分布在桶中（数组），那么，如何做到呢？试想一下，如果不使用 2 的幂次方作为数组的长度会怎么样？
 
@@ -762,7 +654,7 @@ size 操作用于统计元素的数量，必须统计每个 Segment 的大小然
 元素数量。具体优化表现在：在 put、resize 和 size 方法中设计元素总数的更新和计算都避免了锁，
 使用 **CAS** 代替。
 
-get 同样不需要同步，put 操作时如果没有出现哈希冲突，就使用 CAS 添加元素，否则使用
+在ConcurrentHashMap中通过一个Node[]数组来保存添加到map中的键值对。get 同样不需要同步，put 操作时如果没有出现哈希冲突，就使用 CAS 添加元素，否则使用
 synchronized 加锁添加元素。
 
 当某个槽内的元素个数达到 7 且 table 容量不小于 64 时，链表转为**红黑树**。当某个槽内的元素减少到
