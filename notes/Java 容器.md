@@ -427,65 +427,42 @@ ArrayList 基于动态数组实现，LinkedList 基于双向链表实现。Array
 
 #### 1. 存储结构
 
-内部包含了一个 Entry 类型的数组 table。Entry 存储着键值对。它包含了四个字段，从 next 字段我们可以看出 Entry 是一个链表。即数组中的每个位置被当成一个桶，一个桶存放一个链表。HashMap 使用拉链法来解决冲突，同一个链表中存放哈希值和散列桶取模运算结果相同的 Entry。
+JDK8 之前底层实现是数组 + 链表，JDK8 改为数组 + 链表/红黑树，节点类型从Entry 变更为 Node。主
+要成员变量包括存储数据的 table 数组、元素数量 size、加载因子 loadFactor。
+table 数组记录 HashMap 的数据，每个下标对应一条链表，所有哈希冲突的数据都会被存放到同一条
+链表，Node/Entry 节点包含四个成员变量：key、value、next 指针和 hash 值。
+HashMap 中数据以键值对的形式存在，键对应的 hash 值用来计算数组下标，如果两个元素 key 的
+hash 值一样，就会发生哈希冲突，被放到同一个链表上，为使查询效率尽可能高，键的 hash 值要尽可
+能分散。
+HashMap 默认初始化容量为 16，扩容容量必须是 2 的幂次方、最大容量为 1<< 30 、默认加载因子为
+0.75。
 
 <div align="center"> <img src="https://cs-notes-1256109796.cos.ap-guangzhou.myqcloud.com/image-20191208234948205.png"/> </div><br>
 
 ```java
-transient Entry[] table;
+	transient Node<K,V>[] table;
+
+    /**
+     * Holds cached entrySet(). Note that AbstractMap fields are used
+     * for keySet() and values().
+     */
+    transient Set<Map.Entry<K,V>> entrySet;
+
+    /**
+     * The number of key-value mappings contained in this map.
+     */
+    transient int size;
+
+
+    transient int modCount;
+
+    int threshold;
+
+    final float loadFactor;
 ```
 
 ```java
-static class Entry<K,V> implements Map.Entry<K,V> {
-    final K key;
-    V value;
-    Entry<K,V> next;
-    int hash;
 
-    Entry(int h, K k, V v, Entry<K,V> n) {
-        value = v;
-        next = n;
-        key = k;
-        hash = h;
-    }
-
-    public final K getKey() {
-        return key;
-    }
-
-    public final V getValue() {
-        return value;
-    }
-
-    public final V setValue(V newValue) {
-        V oldValue = value;
-        value = newValue;
-        return oldValue;
-    }
-
-    public final boolean equals(Object o) {
-        if (!(o instanceof Map.Entry))
-            return false;
-        Map.Entry e = (Map.Entry)o;
-        Object k1 = getKey();
-        Object k2 = e.getKey();
-        if (k1 == k2 || (k1 != null && k1.equals(k2))) {
-            Object v1 = getValue();
-            Object v2 = e.getValue();
-            if (v1 == v2 || (v1 != null && v1.equals(v2)))
-                return true;
-        }
-        return false;
-    }
-
-    public final int hashCode() {
-        return Objects.hashCode(getKey()) ^ Objects.hashCode(getValue());
-    }
-
-    public final String toString() {
-        return getKey() + "=" + getValue();
-    }
-}
 ```
 
 #### 2. 拉链法的工作原理
@@ -513,109 +490,89 @@ map.put("K3", "V3");
 
 #### 3. put 操作
 
-```java
-public V put(K key, V value) {
-    if (table == EMPTY_TABLE) {
-        inflateTable(threshold);
-    }
-    // 键为 null 单独处理
-    if (key == null)
-        return putForNullKey(value);
-    int hash = hash(key);
-    // 确定桶下标
-    int i = indexFor(hash, table.length);
-    // 先找出是否已经存在键为 key 的键值对，如果存在的话就更新这个键值对的值为 value
-    for (Entry<K,V> e = table[i]; e != null; e = e.next) {
-        Object k;
-        if (e.hash == hash && ((k = e.key) == key || key.equals(k))) {
-            V oldValue = e.value;
-            e.value = value;
-            e.recordAccess(this);
-            return oldValue;
-        }
-    }
+	① 调用 putVal 方法添加元素。
+	② 如果 table 为空或长度为 0 就进行扩容，否则计算元素下标位置，不存在就调用 newNode 创建一个
+	节点。
+	③ 如果存在且是链表，如果首节点和待插入元素的 hash 和 key 都一样，更新节点的 value。 ④ 如果首节点是 TreeNode 类型，调用 putTreeVal 方法增加一个树节点，每一次都比较插入节点和
+	当前节点的大小，待插入节点小就往左子树查找，否则往右子树查找，找到空位后执行两个方法：
+	balanceInsert 方法，插入节点并调整平衡、 moveRootToFront 方法，由于调整平衡后根节点可能
+	变化，需要重置根节点。
+	⑤ 如果都不满足，遍历链表，根据 hash 和 key 判断是否重复，决定更新 value 还是新增节点。如果遍
+	历到了链表末尾则添加节点，如果达到建树阈值 7，还需要调用 treeifyBin 把链表重构为红黑树。
+	⑥ 存放元素后将 modCount 加 1，如果 ++size > threshold ，调用 resize 扩容。
 
-    modCount++;
-    // 插入新键值对
-    addEntry(hash, key, value, i);
-    return null;
+```java
+
+	public V put(K key, V value) {
+        return putVal(hash(key), key, value, false, true);
+    }
+	
+	final V putVal(int hash, K key, V value, boolean onlyIfAbsent,
+                   boolean evict) {
+        Node<K,V>[] tab; Node<K,V> p; int n, i;
+        if ((tab = table) == null || (n = tab.length) == 0)
+            n = (tab = resize()).length;
+        if ((p = tab[i = (n - 1) & hash]) == null)
+            tab[i] = newNode(hash, key, value, null);
+        else {
+            Node<K,V> e; K k;
+            if (p.hash == hash &&
+                ((k = p.key) == key || (key != null && key.equals(k))))
+                e = p;
+            else if (p instanceof TreeNode)
+                e = ((TreeNode<K,V>)p).putTreeVal(this, tab, hash, key, value);
+            else {
+                for (int binCount = 0; ; ++binCount) {
+                    if ((e = p.next) == null) {
+                        p.next = newNode(hash, key, value, null);
+                        if (binCount >= TREEIFY_THRESHOLD - 1) // -1 for 1st
+                            treeifyBin(tab, hash);
+                        break;
+                    }
+                    if (e.hash == hash &&
+                        ((k = e.key) == key || (key != null && key.equals(k))))
+                        break;
+                    p = e;
+                }
+            }
+            if (e != null) { // existing mapping for key
+                V oldValue = e.value;
+                if (!onlyIfAbsent || oldValue == null)
+                    e.value = value;
+                afterNodeAccess(e);
+                return oldValue;
+            }
+        }
+        ++modCount;
+        if (++size > threshold)
+            resize();
+        afterNodeInsertion(evict);
+        return null;
+	
 }
 ```
 
 HashMap 允许插入键为 null 的键值对。但是因为无法调用 null 的 hashCode() 方法，也就无法确定该键值对的桶下标，只能通过强制指定一个桶下标来存放。HashMap 使用第 0 个桶存放键为 null 的键值对。
 
-```java
-private V putForNullKey(V value) {
-    for (Entry<K,V> e = table[0]; e != null; e = e.next) {
-        if (e.key == null) {
-            V oldValue = e.value;
-            e.value = value;
-            e.recordAccess(this);
-            return oldValue;
-        }
-    }
-    modCount++;
-    addEntry(0, null, value, 0);
-    return null;
-}
-```
-
-使用链表的头插法，也就是新的键值对插在链表的头部，而不是链表的尾部。
-
-```java
-void addEntry(int hash, K key, V value, int bucketIndex) {
-    if ((size >= threshold) && (null != table[bucketIndex])) {
-        resize(2 * table.length);
-        hash = (null != key) ? hash(key) : 0;
-        bucketIndex = indexFor(hash, table.length);
-    }
-
-    createEntry(hash, key, value, bucketIndex);
-}
-
-void createEntry(int hash, K key, V value, int bucketIndex) {
-    Entry<K,V> e = table[bucketIndex];
-    // 头插法，链表头部指向新的键值对
-    table[bucketIndex] = new Entry<>(hash, key, value, e);
-    size++;
-}
-```
-
-```java
-Entry(int h, K k, V v, Entry<K,V> n) {
-    value = v;
-    next = n;
-    key = k;
-    hash = h;
-}
 ```
 
 #### 4. 确定桶下标
 
-很多操作都需要先确定一个键值对所在的桶下标。
 
-```java
-int hash = hash(key);
-int i = indexFor(hash, table.length);
 ```
 
 **4.1 计算 hash 值**  
 
 ```java
-final int hash(Object k) {
-    int h = hashSeed;
-    if (0 != h && k instanceof String) {
-        return sun.misc.Hashing.stringHash32((String) k);
+static final int hash(Object key) {
+        int h;
+        return (key == null) ? 0 : (h = key.hashCode()) ^ (h >>> 16);
     }
-
-    h ^= k.hashCode();
-
-    // This function ensures that hashCodes that differ only by
-    // constant multiples at each bit position have a bounded
-    // number of collisions (approximately 8 at default load factor).
-    h ^= (h >>> 20) ^ (h >>> 12);
-    return h ^ (h >>> 7) ^ (h >>> 4);
 }
+
+如果 key 为 null 返回 0，否则就将 key 的 hashCode 方法返回值高低16位异或，让尽可能多的位参与（Java Int的hashcode为32位）
+运算，让结果的 0 和 1 分布更加均匀，降低哈希冲突概率。异或:相同取0，反之取1
+>>>表示无符号右移，也叫逻辑右移，即若该数为正，则高位补0，而若该数为负数，则右移后高位同样补0（>>为有符号右移）
 ```
 
 ```java
@@ -626,38 +583,36 @@ public final int hashCode() {
 
 **4.2 取模**  
 
-令 x = 1\<\<4，即 x 为 2 的 4 次方，它具有以下性质：
-
 ```
-x   : 00010000
-x-1 : 00001111
-```
-
-令一个数 y 与 x-1 做与运算，可以去除 y 位级表示的第 4 位以上数：
-
-```
-y       : 10110010
-x-1     : 00001111
-y&(x-1) : 00000010
+在getNode 代码当中 first = tab[(n - 1) & hash])。
+我们看看代码中注释下方的一行代码：first = tab[(n - 1) & hash])。
+使用数组长度减一 与运算 hash 值。这行代码就是为什么要让前面的 hash 方法移位并异或。
 ```
 
-这个性质和 y 对 x 取模效果是一样的：
+
+**4.3 为什么length一定是2的幂次方**
+
 
 ```
-y   : 10110010
-x   : 00010000
-y%x : 00000010
+到这里，我们提了一个关键的问题： HashMap 的容量为什么建议是 2的幂次方？正好可以和上面的话题接上。楼主就是这么设计的。
+
+为什么要 2 的幂次方呢？
+
+我们说，hash 算法的目的是为了让hash值均匀的分布在桶中（数组），那么，如何做到呢？试想一下，如果不使用 2 的幂次方作为数组的长度会怎么样？
+
+假设我们的数组长度是10，还是上面的公式：
+
+1010 & 101010100101001001000 结果：1000 = 8
+
+1010 & 101000101101001001001 结果：1000 = 8
+
+1010 & 101010101101101001010 结果： 1010 = 10
+
+1010 & 101100100111001101100 结果： 1000 = 8
+
+看到结果我们惊呆了，这种散列结果，会导致这些不同的key值全部进入到相同的插槽中，形成链表，性能急剧下降
 ```
 
-我们知道，位运算的代价比求模运算小的多，因此在进行这种计算时用位运算的话能带来更高的性能。
-
-确定桶下标的最后一步是将 key 的 hash 值对桶个数取模：hash%capacity，如果能保证 capacity 为 2 的 n 次方，那么就可以将这个操作转换为位运算。
-
-```java
-static int indexFor(int h, int length) {
-    return h & (length-1);
-}
-```
 
 #### 5. 扩容-基本原理
 
@@ -681,6 +636,10 @@ static final int MAXIMUM_CAPACITY = 1 << 30;
 
 static final float DEFAULT_LOAD_FACTOR = 0.75f;
 
+static final int TREEIFY_THRESHOLD = 8;
+
+static final int UNTREEIFY_THRESHOLD = 6;
+
 transient Entry[] table;
 
 transient int size;
@@ -692,67 +651,29 @@ final float loadFactor;
 transient int modCount;
 ```
 
-从下面的添加元素代码中可以看出，当需要扩容时，令 capacity 为原来的两倍。
 
-```java
-void addEntry(int hash, K key, V value, int bucketIndex) {
-    Entry<K,V> e = table[bucketIndex];
-    table[bucketIndex] = new Entry<>(hash, key, value, e);
-    if (size++ >= threshold)
-        resize(2 * table.length);
-}
-```
-
-扩容使用 resize() 实现，需要注意的是，扩容操作同样需要把 oldTable 的所有键值对重新插入 newTable 中，因此这一步是很费时的。
-
-```java
-void resize(int newCapacity) {
-    Entry[] oldTable = table;
-    int oldCapacity = oldTable.length;
-    if (oldCapacity == MAXIMUM_CAPACITY) {
-        threshold = Integer.MAX_VALUE;
-        return;
-    }
-    Entry[] newTable = new Entry[newCapacity];
-    transfer(newTable);
-    table = newTable;
-    threshold = (int)(newCapacity * loadFactor);
-}
-
-void transfer(Entry[] newTable) {
-    Entry[] src = table;
-    int newCapacity = newTable.length;
-    for (int j = 0; j < src.length; j++) {
-        Entry<K,V> e = src[j];
-        if (e != null) {
-            src[j] = null;
-            do {
-                Entry<K,V> next = e.next;
-                int i = indexFor(e.hash, newCapacity);
-                e.next = newTable[i];
-                newTable[i] = e;
-                e = next;
-            } while (e != null);
-        }
-    }
-}
-```
+扩容使用 resize() 实现，需要注意的是，扩容操作同样需要把 oldTable 的所有键值对**重新插入 newTable 中**，因此这一步是很费时的。
+① 如果当前容量 oldCap > 0 且达到最大容量，将阈值设为 Integer 最大值，return 终止扩容。
+② 如果未达到最大容量，当 oldCap << 1 不超过最大容量就扩大为 2 倍。
+③ 如果都不满足且当前扩容阈值 oldThr > 0 ，使用当前扩容阈值作为新容量。
+④ 否则将新容量置为默认初始容量 16，新扩容阈值置为 12。
 
 #### 6. 扩容-重新计算桶下标
 
 在进行扩容时，需要把键值对重新计算桶下标，从而放到对应的桶上。在前面提到，HashMap 使用 hash%capacity 来确定桶下标。HashMap capacity 为 2 的 n 次方这一特点能够极大降低重新计算桶下标操作的复杂度。
 
+① 如果节点为 null 不进行处理。
+② 如果节点不为 null 且没有next节点，那么通过节点的 hash 值和 新容量-1 进行与运算计算下标存入
+新的 table 数组。
+③ 如果节点为 TreeNode 类型，调用 split 方法处理，如果节点数 hc 达到6 会调用 untreeify 方
+法转回链表。
+④ 如果是链表节点，需要将链表拆分为 hash 值超出旧容量的链表和未超出容量的链表。对于 hash & oldCap == 0 的部分不需要做处理，否则需要放到新的下标位置上，新下标 = 旧下标 + 旧容量。
+
 假设原数组长度 capacity 为 16，扩容之后 new capacity 为 32：
 
-```html
-capacity     : 00010000
-new capacity : 00100000
+```Java 新下标
+newTab[e.hash & (newCap - 1)] = e;
 ```
-
-对于一个 Key，它的哈希值 hash 在第 5 位：
-
-- 为 0，那么 hash%00010000 = hash%00100000，桶位置和原来一致；
-- 为 1，hash%00010000 = hash%00100000 + 16，桶位置是原位置 + 16。
 
 #### 7. 计算数组容量
 
@@ -787,9 +708,24 @@ static final int tableSizeFor(int cap) {
 }
 ```
 
-#### 8. 链表转红黑树
+#### 8. 线程不安全
 
-从 JDK 1.8 开始，一个桶存储的链表长度大于等于 8 时会将链表转换为红黑树。
+- JDK7 存在死循环和数据丢失问题。
+- 数据丢失：
+	** 并发赋值被覆盖：**  在 createEntry 方法中，新添加的元素直接放在头部，使元素之后可以被更
+	快访问，但如果两个线程同时执行到此处，会导致其中一个线程的赋值被覆盖。
+	** 已遍历区间新增元素丢失**  当某个线程在 transfer 方法迁移时，其他线程新增的元素可能落在
+	已遍历过的哈希槽上。遍历完成后，table 数组引用指向了 newTable，新增元素丢失。
+	** 新表被覆盖：**  如果 resize 完成，执行了 table = newTable ，则后续元素就可以在新表上进行
+	插入。但如果多线程同时 resize ，每个线程都会 new 一个数组，这是线程内的局部对象，线程
+	之间不可见。迁移完成后 resize 的线程会赋值给 table 线程共享变量，可能会覆盖其他线程的操
+	作，在新表中插入的对象都会被丢弃。
+	
+- 死循环： 扩容时 resize 调用 transfer 使用头插法迁移元素，虽然 newTable 是局部变量，但原先
+	table 中的 Entry 链表是共享的，问题根源是 Entry 的 next 指针并发修改，某线程还没有将 table 设为
+	newTable 时用完了 CPU 时间片，导致数据丢失或死循环。
+	JDK8 在 resize 方法中完成扩容，并改用** 尾插法** ，不会产生死循环，但并发下仍可能丢失数据。可用
+	ConcurrentHashMap 或 Collections.synchronizedMap 包装成同步集合。
 
 #### 9. 与 Hashtable 的比较
 
